@@ -1,0 +1,17 @@
+# PoC·회귀 테스트용 룰 (SID 9900000~). claudtest2의 tests/pcaps/demo.pcap, extras.pcap에서 결정적으로 발생한다.
+# 운영 룰셋에 넣지 않는다.
+
+# 여러 PC -> 외부 웹: 출발지 자산 결합 (10.10.0.120은 IP 재사용 IP)
+alert http $HOME_NET any -> any any (msg:"NSM-TEST HTTP example.com 접속"; flow:established,to_server; http.host; content:"example.com"; classtype:policy-violation; sid:9900001; rev:1;)
+# 내부 PC -> 사내 웹 서버: 목적지 역할(웹 서버) 결합
+alert http $HOME_NET any -> $HOME_NET any (msg:"NSM-TEST curl User-Agent"; flow:established,to_server; http.user_agent; content:"curl/"; startswith; classtype:policy-violation; sid:9900002; rev:1;)
+# Kerberos AS-REQ -> DC: 중요 서버 대상 표시
+alert krb5 any any -> any any (msg:"NSM-TEST Kerberos AS-REQ"; krb5_msg_type:10; classtype:misc-activity; sid:9900003; rev:1;)
+# 10.10.0.120 발신: 시각이 다른 두 단말(laptop-sales07 -> galaxy-s24)에 각각 붙는지 (IP 재사용)
+# IP 전용 룰은 연결당 한 번만 걸린다. threshold를 쓰지 않는 이유: pcap 모드에서 경보가 시간 순서대로
+# 나오지 않아(앱 계층 룰이 함께 있으면 13:01 경보가 09:12보다 먼저 기록됨) limit 창이 앞선 경보를 누른다.
+alert ip 10.10.0.120 any -> any any (msg:"NSM-TEST 10.10.0.120 발신"; classtype:misc-activity; sid:9900004; rev:1;)
+# Windows 대상 룰이 Linux 자산(srv-web01)에 걸림: OS 불일치 표시
+alert ssh any any -> any any (msg:"NSM-TEST Windows 대상 룰 (OS 불일치 확인용)"; flow:to_server; threshold:type limit, track by_dst, count 1, seconds 3600; classtype:misc-activity; sid:9900005; rev:1;)
+# AhnLab V3 업데이트 통신 (extras.pcap)
+alert http any any -> any any (msg:"NSM-TEST AhnLab V3 업데이트 통신"; flow:established,to_server; http.user_agent; content:"v3inet4"; classtype:policy-violation; sid:9900006; rev:1;)
