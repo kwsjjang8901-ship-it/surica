@@ -1,0 +1,3 @@
+# 사내 룰. SID 9000000~9099999 사용 (테스트 룰은 tests/rules/, 9900000~)
+# 예) 사내 정책: 업무망에서 Telnet 접속
+# alert tcp $HOME_NET any -> $HOME_NET 23 (msg:"NSM POLICY Telnet 접속 (내부)"; flow:to_server,established; classtype:policy-violation; sid:9000001; rev:1;)

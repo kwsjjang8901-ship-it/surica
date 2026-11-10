@@ -1,0 +1,8 @@
+# suricata-update 설정. 실행: suricata-update -c suricata/update/update.yaml
+disable-conf: suricata/update/disable.conf
+enable-conf: suricata/update/enable.conf
+modify-conf: suricata/update/modify.conf
+sources:
+  - et/open
+local:
+  - suricata/rules/local.rules

@@ -1,0 +1,38 @@
+# 센서 설정 예시. Manager가 센서마다 배포하는 파일이며, tools/render_config.py가
+# 이 파일 하나로 Zeek·Suricata·전송 설정을 만든다. 생략한 항목은 기본값(tools/sensor_config.py DEFAULTS).
+#
+# 실제 동작 = suricata.enabled AND 해당 출력 on AND transport.streams.<스트림> on
+
+sensor_id: sensor-01
+interfaces: [eth1]                         # 실시간 수집 인터페이스 (pcap 실행에는 쓰지 않음)
+asset_nets: [10.0.0.0/8, 172.16.0.0/12]   # Zeek AssetID::asset_nets 와 Suricata HOME_NET 공통 원천
+
+zeek:
+  fanout_id: 99                            # Zeek AF_PACKET fanout 그룹
+  asset_id:
+    enabled: true
+
+suricata:
+  enabled: false                           # ★ 엔진 전체 on/off (출시 기본값 off)
+  workers: 2
+  cluster_id: 98                           # Zeek fanout_id와 달라야 두 엔진이 각각 전체 트래픽을 받음
+  outputs:
+    alert: true
+    stats: true                            # 센서 상태(패킷 손실) 전송용
+    anomaly: false
+    protocol_logs: false                   # http/dns/tls/smb/ssh/flow. Zeek와 중복이라 기본 off
+  alert_fields:
+    app_layer: false                       # 경보에 URL·헤더 등 앱 계층 값 (개인정보, 기본 off)
+    payload: false                         # 페이로드·패킷 원문
+    rule_metadata: true                    # 룰 metadata (MITRE 태그 등)
+  rules:
+    files: [suricata.rules, local.rules]   # suricata-update 산출물 + 사내 룰
+    threshold: true                        # threshold.config 적용 (경보 폭주 억제)
+
+transport:
+  streams:                                 # 엔진이 켜져 있어도 전송만 끌 수 있음 (룰 튜닝 기간 등)
+    asset_signal: true
+    zeek_notice: true
+    suricata_alert: true
+    suricata_stats: true
+  stats_interval: 60                       # suricata_stats 전송 간격(초)
