@@ -1,0 +1,1 @@
+alert tcp any any -> any any (msg:"ET POLICY curl User-Agent Outbound";  sid:2013028; rev:1;)

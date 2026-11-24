@@ -1,0 +1,1 @@
+alert ip any any -> any any (msg:"ET CNC Feodo Tracker Reported CnC Server";  sid:2404300; rev:1;)

@@ -1,0 +1,1 @@
+alert ip any any -> any any (msg:"ET CINS Active Threat Intelligence Poor Reputation IP";  sid:2403300; rev:1;)

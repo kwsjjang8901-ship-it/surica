@@ -126,16 +126,17 @@ fi
 start=$(date +%s)
 run_suricata -r "/pcap/$(basename "$PCAP")" -k none -l /out > "$OUT/suricata/run.log" 2>&1 \
 	|| { echo "      Suricata 실행 실패: $OUT/suricata/run.log" >&2; exit 3; }
-touch "$OUT/suricata/eve.json"
+touch "$OUT/suricata/eve-alert.json"   # 경보가 없어도 빈 경보 파일
 echo "      완료 ($(( $(date +%s) - start ))초), 룰 $(grep -c '^alert\|^drop\|^pass' "$OUT/rules/"*.rules | awk -F: '{s+=$2} END {print s}')개"
 
 # ---------------------------------------------------------------- 4. 전송 스트림 + 경보 결합
 echo "[4/4] 전송 스트림 · 경보 결합"
-"$PYTHON" "$ROOT/tools/eve_envelope.py" "$OUT/suricata/eve.json" -t "$OUT/config/transport/streams.json" \
+"$PYTHON" "$ROOT/tools/eve_envelope.py" "$OUT/suricata/eve-alert.json" "$OUT/suricata/eve-stats.json" \
+	-t "$OUT/config/transport/streams.json" \
 	-o "$OUT/transport" --sensor-id "$SENSOR_ID"
-# 전송이 꺼져 있어도 센서 로컬 보기는 eve.json으로 만든다.
+# 전송이 꺼져 있어도 센서 로컬 보기는 경보 파일(eve-alert.json)로 만든다.
 ALERTS="$OUT/transport/suricata_alert.jsonl"
-[ -f "$ALERTS" ] || ALERTS="$OUT/suricata/eve.json"
+[ -f "$ALERTS" ] || ALERTS="$OUT/suricata/eve-alert.json"
 join_args=("$ALERTS" -o "$OUT")
 [ -n "$ASSETS" ] && join_args+=(-a "$ASSETS")
 [ -n "$CONN_LOG" ] && join_args+=(-z "$CONN_LOG")

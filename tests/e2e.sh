@@ -5,6 +5,8 @@
 #   2. Suricata on: demo.pcap 경보가 자산에 맞게 붙는지 (IP 재사용, 중요 서버, OS 불일치, Zeek uid)
 #   3. Suricata on: extras.pcap AhnLab 통신 경보
 #   4. Suricata off: Suricata 생성물이 없고, AssetID 결과가 AssetID 단독 실행과 같은지 (회귀)
+#   5. 룰 범위 기본값: ET 파일 이름을 흉내 낸 표본(tests/rules/et_sample)에 suricata-update + disable.conf 를 돌려
+#      켜진 룰이 기대한 것만인지(IP 평판·DNS·정책·JA3·횟수 기반 스캔·Heartbleed·Suricata 기본 이벤트 룰은 꺼짐)
 #
 # 사용법: ASSETID_ROOT=<claudtest2 경로> tests/e2e.sh
 
@@ -56,10 +58,21 @@ res.append(check(any("OS 불일치" in f for x in by(9900005) for f in x["flags"
 res.append(check(all(x.get("zeek_uid") for x in g), "모든 경보에 Zeek uid 연결 (Community ID)"))
 sys.exit(0 if all(res) else 1)
 EOF
-for f in transport/suricata_alert.jsonl transport/suricata_stats.jsonl alerts_report.html; do
+for f in suricata/eve-alert.json suricata/eve-stats.json transport/suricata_alert.jsonl transport/suricata_stats.jsonl alerts_report.html; do
 	[ -s "$TMP/on/$f" ] && ok "$f 생성" || bad "$f 없음"
 done
 if grep -q '"community_id"' "$TMP/on/assetid/zeek/conn.log"; then ok "on: conn.log에 community_id"; else bad "on: conn.log에 community_id 없음"; fi
+# 경보 파일에는 경보만, 통계 파일에는 통계만 (가는 스트림이 다름)
+if "$PYTHON" -c '
+import json, os, sys
+d = sys.argv[1]
+types = lambda f: {json.loads(l)["event_type"] for l in open(os.path.join(d, f)) if l.strip()}
+sys.exit(0 if types("eve-alert.json") == {"alert"} and types("eve-stats.json") == {"stats"}
+         and not os.path.exists(os.path.join(d, "eve.json")) else 1)' "$TMP/on/suricata"; then
+	ok "경보·통계 파일 분리(eve-alert.json, eve-stats.json)"
+else
+	bad "경보·통계 파일이 섞이거나 eve.json 이 생김"
+fi
 
 echo "[3] Suricata on: extras.pcap (AhnLab 통신)"
 "$ROOT/tools/run_poc.sh" -S on -a "$ASSETID_ROOT" -r "$ROOT/tests/rules/test.rules" -o "$TMP/ex" "$PCAPS/extras.pcap" > "$TMP/ex.log" 2>&1 \
@@ -86,6 +99,22 @@ if cmp -s "$TMP/off/assetid/assets.json" "$TMP/alone/assets.json" \
 	ok "off: assets.json, asset_signal.log가 AssetID 단독 실행과 같음"
 else
 	bad "off: AssetID 단독 실행과 결과가 다름"
+fi
+
+echo "[5] 룰 범위 기본값 (suricata-update + disable.conf)"
+tar czf "$TMP/et.tar.gz" -C "$ROOT/tests/rules/et_sample" rules
+mkdir -p "$TMP/sud" "$TMP/sur"
+if docker run --rm --user "$(id -u):$(id -g)" -v "$TMP:/w" -v "$ROOT/suricata/update:/u:ro" --entrypoint suricata-update "$SURICATA_IMAGE" \
+	--data-dir /w/sud -o /w/sur --no-test --no-reload --disable-conf /u/disable.conf --url file:///w/et.tar.gz > "$TMP/su.log" 2>&1; then
+	enabled="$(grep -v '^#' "$TMP/sur/suricata.rules" | grep -o 'sid:[0-9]*;' | tr -d 'sid:;' | sort -n | tr '\n' ' ')"
+	# 켜짐: SQL Injection(web_server), Nmap 도구 지문(scan), ETERNALBLUE(exploit), Sliver C2(malware)
+	if [ "$enabled" = "2006446 2009358 2024217 2050000 " ]; then
+		ok "켜진 룰이 기대한 4개뿐 (꺼진 카테고리·횟수 기반 스캔·Heartbleed·기본 이벤트 룰)"
+	else
+		bad "켜진 룰이 다름: $enabled"
+	fi
+else
+	cat "$TMP/su.log"; bad "suricata-update 실패"
 fi
 
 echo

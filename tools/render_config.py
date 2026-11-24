@@ -4,7 +4,7 @@
 생성물 (--out DIR):
   state.json                 실제로 켜지는 것(엔진, 출력, 전송 스트림)
   transport/streams.json     수집 에이전트가 읽을 스트림 on/off
-  zeek/nsm_sensor.zeek       Zeek 설정 (AssetID 자산 대역, Suricata on이면 Community ID)
+  zeek/nsm_sensor.zeek       Zeek 설정 (AssetID 자산 대역, Community ID seed, Suricata on이면 conn Community ID)
   suricata/suricata.yaml     Suricata on일 때만. 배포본 suricata.yaml(--base)을 읽어 필요한 부분만 바꾼 전체 설정
 
 Suricata off이면 suricata/ 아래 생성물을 지운다(이전 실행의 잔여 설정으로 엔진이 뜨지 않게).
@@ -26,12 +26,26 @@ import sensor_config as sc  # noqa: E402
 YAML_HEADER = "%YAML 1.1\n---\n# render_config.py 가 생성한 파일입니다. 직접 고치지 말고 sensor.yaml을 고치세요.\n"
 
 
-def eve_output(cfg):
+def _eve(filename, types, cfg, community_id=False):
+    e = {"enabled": True, "filetype": "regular", "filename": filename}
+    if community_id:
+        e["community-id"] = True
+        e["community-id-seed"] = cfg["community_id_seed"]
+    e["types"] = types
+    return {"eve-log": e}
+
+
+def eve_outputs(cfg):
+    """eve-log 출력 목록. 경보·통계·기타(anomaly·프로토콜 로그)를 파일별로 나눈다(켠 것만).
+
+    경보는 Manager로 바로 가는 suricata_alert 스트림의 원천이라 따로 둔다. 통계는 센서 상태(suricata_stats),
+    기타는 센서 로컬 조사용이다. Community ID는 경보·기타에만 넣는다(통계에는 연결이 없음).
+    """
     s = cfg["suricata"]
     out, fields = s["outputs"], s["alert_fields"]
-    types = []
+    outputs = []
     if out["alert"]:
-        types.append({"alert": {
+        outputs.append(_eve(sc.EVE_FILES["alert"], [{"alert": {
             "payload": fields["payload"],
             "payload-printable": fields["payload"],
             "packet": fields["payload"],
@@ -43,21 +57,17 @@ def eve_output(cfg):
                 "flow": False,
                 "rule": {"metadata": fields["rule_metadata"], "raw": False},
             },
-        }})
-    if out["anomaly"]:
-        types.append({"anomaly": {"enabled": True}})
-    if out["protocol_logs"]:
-        types.extend(sc.PROTOCOL_LOG_TYPES)
+        }}], cfg, community_id=True))
     if out["stats"]:
-        types.append({"stats": {"totals": True, "threads": False, "deltas": True}})
-    return {"eve-log": {
-        "enabled": True,
-        "filetype": "regular",
-        "filename": "eve.json",
-        "community-id": True,
-        "community-id-seed": 0,
-        "types": types,
-    }}
+        outputs.append(_eve(sc.EVE_FILES["stats"], [{"stats": {"totals": True, "threads": False, "deltas": True}}], cfg))
+    other = []
+    if out["anomaly"]:
+        other.append({"anomaly": {"enabled": True}})
+    if out["protocol_logs"]:
+        other.extend(sc.PROTOCOL_LOG_TYPES)
+    if other:
+        outputs.append(_eve(sc.EVE_FILES["other"], other, cfg, community_id=True))
+    return outputs
 
 
 def suricata_yaml(cfg, base, rule_path, threshold_file):
@@ -78,8 +88,8 @@ def suricata_yaml(cfg, base, rule_path, threshold_file):
     else:
         y.pop("threshold-file", None)
 
-    # 출력은 eve-log 하나만 (배포본의 fast.log, 기본 eve 프로토콜 로그 등은 모두 제거)
-    y["outputs"] = [eve_output(cfg)]
+    # 출력은 eve-log만 (배포본의 fast.log, 기본 eve 프로토콜 로그 등은 모두 제거). 경보·통계는 파일을 나눈다
+    y["outputs"] = eve_outputs(cfg)
 
     stats = dict(y.get("stats") or {})
     stats["enabled"] = bool(s["outputs"]["stats"])
@@ -134,7 +144,14 @@ def zeek_script(cfg, eff):
         lines.append("redef AssetID::asset_nets = { %s };" % ", ".join(str(n) for n in cfg["asset_nets"]))
     if eff["suricata"]:
         # Suricata 경보와 Zeek 로그를 잇는 키. Suricata off이면 conn.log를 지금과 같게 두려고 로드하지 않는다.
+        # (nsm_rules 는 Suricata와 상관없이 항상 로드하고 NSM::community_id_seed 로 seed를 맞춘다. 같은 스크립트를
+        #  두 번 로드해도 한 번만 적용된다.)
         lines.append("@load policy/protocols/conn/community-id-logging")
+        lines.append("redef CommunityID::seed = %d;" % cfg["community_id_seed"])
+    # nsm_rules 를 함께 로드한 센서: 근거·선별 전송 로그의 Community ID seed 도 같은 값으로(이 파일을 nsm_rules 뒤에 로드)
+    lines.append("@ifdef ( NSM::community_id_seed )")
+    lines.append("redef NSM::community_id_seed = %d;" % cfg["community_id_seed"])
+    lines.append("@endif")
     return "\n".join(lines) + "\n"
 
 
@@ -148,10 +165,14 @@ def render(cfg, out_dir, base_path=None, rule_path="/var/lib/suricata/rules", th
     eff = sc.effective(cfg)
     state = {"sensor_id": cfg["sensor_id"], **eff,
              "zeek_asset_id": cfg["zeek"]["asset_id"]["enabled"],
-             "home_net": sc.home_net(cfg)}
+             "home_net": sc.home_net(cfg),
+             "community_id_seed": cfg["community_id_seed"]}
     write(os.path.join(out_dir, "state.json"), json.dumps(state, ensure_ascii=False, indent=1) + "\n")
     write(os.path.join(out_dir, "transport", "streams.json"),
           json.dumps({"stats_interval": cfg["transport"]["stats_interval"], "streams": eff["streams"],
+                      # 수집 에이전트가 읽을 eve 파일(스트림 -> Suricata 로그 디렉터리 안 파일 이름)
+                      "inputs": {st: sc.EVE_FILES[out] for st, out in sc.SURICATA_STREAMS.items()
+                                 if eff["streams"].get(st)},
                       "alert_fields": cfg["suricata"]["alert_fields"]}, indent=1) + "\n")
     write(os.path.join(out_dir, "zeek", "nsm_sensor.zeek"), zeek_script(cfg, eff))
 

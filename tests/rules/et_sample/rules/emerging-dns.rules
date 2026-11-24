@@ -1,0 +1,1 @@
+alert udp any any -> any 53 (msg:"ET DNS Query for .su TLD"; content:"su"; sid:2014169; rev:1;)

@@ -6,6 +6,7 @@
 sensor_id: sensor-01
 interfaces: [eth1]                         # 실시간 수집 인터페이스 (pcap 실행에는 쓰지 않음)
 asset_nets: [10.0.0.0/8, 172.16.0.0/12]   # Zeek AssetID::asset_nets 와 Suricata HOME_NET 공통 원천
+community_id_seed: 0                       # Suricata eve 와 Zeek(nsm_rules·conn)에 같은 값. 다르면 경보와 Zeek 기록을 잇지 못함
 
 zeek:
   fanout_id: 99                            # Zeek AF_PACKET fanout 그룹
@@ -16,18 +17,18 @@ suricata:
   enabled: false                           # ★ 엔진 전체 on/off (출시 기본값 off)
   workers: 2
   cluster_id: 98                           # Zeek fanout_id와 달라야 두 엔진이 각각 전체 트래픽을 받음
-  outputs:
-    alert: true
+  outputs:                                 # 경보는 eve-alert.json, 통계는 eve-stats.json 으로 파일을 나눔
+    alert: true                            # Manager로 바로 가는 suricata_alert 스트림의 원천
     stats: true                            # 센서 상태(패킷 손실) 전송용
-    anomaly: false
-    protocol_logs: false                   # http/dns/tls/smb/ssh/flow. Zeek와 중복이라 기본 off
+    anomaly: false                         # 켜면 eve-other.json(센서 로컬, 전송 안 함)
+    protocol_logs: false                   # http/dns/tls/smb/ssh/flow. Zeek와 중복이라 기본 off. 켜면 eve-other.json
   alert_fields:
     app_layer: false                       # 경보에 URL·헤더 등 앱 계층 값 (개인정보, 기본 off)
     payload: false                         # 페이로드·패킷 원문
     rule_metadata: true                    # 룰 metadata (MITRE 태그 등)
   rules:
     files: [suricata.rules, local.rules]   # suricata-update 산출물 + 사내 룰
-    threshold: true                        # threshold.config 적용 (경보 폭주 억제)
+    threshold: true                        # threshold.config 적용 (기본: 룰·출발지·목적지마다 60초에 1건)
 
 transport:
   streams:                                 # 엔진이 켜져 있어도 전송만 끌 수 있음 (룰 튜닝 기간 등)

@@ -1,0 +1,1 @@
+alert ip any any -> any any (msg:"ET TOR Known Tor Relay"; threshold: type limit, track by_src, seconds 60, count 1; sid:2520000; rev:1;)

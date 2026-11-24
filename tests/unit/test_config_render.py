@@ -93,6 +93,10 @@ class TestSensorConfig(unittest.TestCase):
             {"suricata": {"outputs": True}},
             {"transport": {"stats_interval": 0}},
             {"suricata": {"rules": {"files": []}}},
+            {"community_id_seed": -1},
+            {"community_id_seed": 65536},
+            {"community_id_seed": "0"},
+            {"community_id_seed": True},
             ["not", "a", "mapping"],
         ]
         for b in bad:
@@ -137,8 +141,12 @@ class TestRender(unittest.TestCase):
         z = self.read("zeek", "nsm_sensor.zeek")
         self.assertIn("redef AssetID::asset_nets = { 10.0.0.0/8 };", z)
         self.assertNotIn("community-id", z)  # off이면 conn.log를 지금과 같게
+        self.assertNotIn("CommunityID::seed", z)
+        # nsm_rules 를 함께 쓰면 근거·선별 전송 로그의 seed 는 엔진 on/off 와 상관없이 맞춘다
+        self.assertIn("@ifdef ( NSM::community_id_seed )\nredef NSM::community_id_seed = 0;\n@endif", z)
         st = json.loads(self.read("transport", "streams.json"))
         self.assertFalse(st["streams"]["suricata_alert"])
+        self.assertEqual(st["inputs"], {})
 
     def test_on_requires_base(self):
         with self.assertRaises(sc.ConfigError):
@@ -153,12 +161,15 @@ class TestRender(unittest.TestCase):
         self.assertTrue(text.startswith("%YAML 1.1\n---\n"))
         yaml_, Loader, _ = rc._suricata_yaml_io()
         y = yaml_.load(text, Loader=Loader)
-        # 출력은 eve-log 하나 (fast, 기본 eve 프로토콜 로그, stats.log 제거)
-        self.assertEqual([list(o)[0] for o in y["outputs"]], ["eve-log"])
-        eve = y["outputs"][0]["eve-log"]
-        self.assertEqual(eve["community-id"], "yes")
+        # 출력은 eve-log 둘: 경보 파일과 통계 파일 (fast, 기본 eve 프로토콜 로그, stats.log 제거)
+        self.assertEqual([list(o)[0] for o in y["outputs"]], ["eve-log", "eve-log"])
+        eve, stats = y["outputs"][0]["eve-log"], y["outputs"][1]["eve-log"]
+        self.assertEqual((eve["filename"], stats["filename"]), ("eve-alert.json", "eve-stats.json"))
+        self.assertEqual((eve["community-id"], eve["community-id-seed"]), ("yes", "0"))
+        self.assertNotIn("community-id", stats)
         types = [t if isinstance(t, str) else list(t)[0] for t in eve["types"]]
-        self.assertEqual(types, ["alert", "stats"])
+        self.assertEqual(types, ["alert"])
+        self.assertEqual([list(t)[0] for t in stats["types"]], ["stats"])
         alert = eve["types"][0]["alert"]
         self.assertEqual(alert["payload"], "no")
         self.assertEqual(alert["metadata"]["app-layer"], "no")
@@ -173,7 +184,11 @@ class TestRender(unittest.TestCase):
         self.assertIn("exception-policy:\n", text)
         self.assertNotIn("null", text)
         self.assertNotIn("true", text)
-        self.assertIn("@load policy/protocols/conn/community-id-logging", self.read("zeek", "nsm_sensor.zeek"))
+        z = self.read("zeek", "nsm_sensor.zeek")
+        self.assertIn("@load policy/protocols/conn/community-id-logging", z)
+        self.assertIn("redef CommunityID::seed = 0;", z)
+        st = json.loads(self.read("transport", "streams.json"))
+        self.assertEqual(st["inputs"], {"suricata_alert": "eve-alert.json", "suricata_stats": "eve-stats.json"})
 
     def test_on_optional_outputs(self):
         if not HAVE_YAML:
@@ -185,12 +200,28 @@ class TestRender(unittest.TestCase):
         rc.render(cfg, self.out, self.base, "/rules", "/cfg/threshold.config")
         yaml_, Loader, _ = rc._suricata_yaml_io()
         y = yaml_.load(self.read("suricata", "suricata.yaml"), Loader=Loader)
-        types = [t if isinstance(t, str) else list(t)[0] for t in y["outputs"][0]["eve-log"]["types"]]
-        self.assertEqual(types, ["alert", "anomaly"] + sc.PROTOCOL_LOG_TYPES)
+        # 통계 끔 -> 경보 파일과 기타(anomaly·프로토콜 로그, 센서 로컬) 파일
+        files = [o["eve-log"]["filename"] for o in y["outputs"]]
+        self.assertEqual(files, ["eve-alert.json", "eve-other.json"])
+        types = [t if isinstance(t, str) else list(t)[0] for t in y["outputs"][1]["eve-log"]["types"]]
+        self.assertEqual(types, ["anomaly"] + sc.PROTOCOL_LOG_TYPES)
         alert = y["outputs"][0]["eve-log"]["types"][0]["alert"]
         self.assertEqual((alert["payload"], alert["metadata"]["app-layer"]), ("yes", "yes"))
         self.assertEqual(y["stats"]["enabled"], "no")
         self.assertNotIn("threshold-file", y)
+
+    def test_community_id_seed(self):
+        if not HAVE_YAML:
+            self.skipTest("PyYAML 없음")
+        cfg = sc.from_dict({"suricata": {"enabled": True}, "community_id_seed": 7})
+        rc.render(cfg, self.out, self.base, "/rules", None)
+        yaml_, Loader, _ = rc._suricata_yaml_io()
+        y = yaml_.load(self.read("suricata", "suricata.yaml"), Loader=Loader)
+        self.assertEqual(y["outputs"][0]["eve-log"]["community-id-seed"], "7")
+        z = self.read("zeek", "nsm_sensor.zeek")
+        self.assertIn("redef CommunityID::seed = 7;", z)
+        self.assertIn("redef NSM::community_id_seed = 7;", z)
+        self.assertEqual(json.loads(self.read("state.json"))["community_id_seed"], 7)
 
     def test_cli_switch_override(self):
         if not HAVE_YAML:
