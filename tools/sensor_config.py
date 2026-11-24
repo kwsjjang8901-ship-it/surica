@@ -17,6 +17,9 @@ DEFAULTS = {
     "sensor_id": "sensor-01",
     "interfaces": [],
     "asset_nets": [],
+    # Community ID seed(0~65535). Suricata eve 의 community-id-seed 와 Zeek(nsm_rules NSM::community_id_seed,
+    # CommunityID::seed)에 같은 값을 넣는다. 다르면 Manager가 경보와 Zeek 연결 기록을 잇지 못한다.
+    "community_id_seed": 0,
     "zeek": {
         "fanout_id": 99,            # Zeek AF_PACKET fanout 그룹 (Suricata cluster_id와 달라야 함)
         "asset_id": {"enabled": True},
@@ -54,6 +57,11 @@ DEFAULTS = {
 
 # Suricata 프로토콜 로그를 켰을 때 쓰는 eve 타입
 PROTOCOL_LOG_TYPES = ["http", "dns", "tls", "smb", "ssh", "flow"]
+
+# eve 출력 파일. 경보와 통계는 가는 곳(전송 스트림)이 달라 파일을 나눈다.
+#   경보 파일은 수집 에이전트가 suricata_alert 로, 통계 파일은 suricata_stats 로 보낸다.
+#   anomaly·프로토콜 로그(기본 끔)는 센서 로컬 조사용 파일에만 쓴다(전송하지 않음).
+EVE_FILES = {"alert": "eve-alert.json", "stats": "eve-stats.json", "other": "eve-other.json"}
 
 # 스트림 -> 그 스트림을 만드는 Suricata 출력
 SURICATA_STREAMS = {"suricata_alert": "alert", "suricata_stats": "stats"}
@@ -113,6 +121,9 @@ def validate(cfg):
         raise ConfigError("suricata.cluster_id 와 zeek.fanout_id 가 같으면 두 엔진이 패킷을 나눠 갖게 됩니다")
     if not s["rules"]["files"]:
         raise ConfigError("suricata.rules.files 가 비어 있습니다")
+    seed = cfg["community_id_seed"]
+    if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 65535:
+        raise ConfigError("community_id_seed 는 0~65535 정수여야 합니다 (값: %r)" % seed)
     iv = cfg["transport"]["stats_interval"]
     if not isinstance(iv, (int, float)) or iv <= 0:
         raise ConfigError("transport.stats_interval 은 0보다 커야 합니다")

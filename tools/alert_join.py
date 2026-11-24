@@ -2,7 +2,7 @@
 """Suricata 경보 + AssetID 자산 -> 자산 컨텍스트가 붙은 경보 (PoC용 Manager 결합 대체).
 
 입력
-  경보:   eve_envelope.py가 만든 suricata_alert.jsonl, 또는 Suricata eve.json(alert만 사용)
+  경보:   eve_envelope.py가 만든 suricata_alert.jsonl, 또는 Suricata eve 경보 파일(eve-alert.json, alert만 사용)
   자산:   AssetID 리졸버(claudtest2 tools/asset_resolver.py)의 assets.json
           각 자산의 ips[] = IP 점유 구간 {ip, first, last}
   선택:   Zeek conn.log(JSON, community_id 포함) -> 경보에 Zeek uid 연결
@@ -43,7 +43,7 @@ STATUS_ASSET, STATUS_GAP, STATUS_UNKNOWN, STATUS_EXTERNAL = "자산", "점유 �
 # ---------------------------------------------------------------- 입력
 
 def load_alerts(path):
-    """envelope JSONL 또는 eve.json -> 정규화된 경보 목록."""
+    """envelope JSONL 또는 eve 경보 파일(eve-alert.json) -> 정규화된 경보 목록."""
     out = []
     with open(path, encoding="utf-8") as f:
         for line in f:

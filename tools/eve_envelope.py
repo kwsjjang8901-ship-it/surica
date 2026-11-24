@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Suricata eve.json -> 전송 스트림(JSONL) 변환.
+"""Suricata eve 파일 -> 전송 스트림(JSONL) 변환.
 
 수집 에이전트(shipper)가 Manager로 보내기 전에 하는 일을 PoC로 구현한다.
   - event_type으로 스트림을 나눈다: alert -> suricata_alert, stats -> suricata_stats
+    (센서는 경보 eve-alert.json 과 통계 eve-stats.json 을 따로 쓴다. 파일을 여러 개 받아도, 한 파일이어도 같다)
   - 꺼진 스트림은 만들지 않는다(transport/streams.json 기준)
   - 허용 목록(allowlist)에 있는 필드만 보낸다. 앱 계층 값·페이로드는 alert_fields에서 켠 경우에만
   - suricata_stats는 stats_interval(초)마다 1건으로 줄인다
@@ -19,7 +20,8 @@ import sys
 
 ALERT_KEYS = ("timestamp", "flow_id", "in_iface", "src_ip", "src_port", "dest_ip", "dest_port",
               "proto", "app_proto", "direction", "community_id", "tx_id")
-ALERT_INNER_KEYS = ("action", "gid", "signature_id", "rev", "signature", "category", "severity")
+# source·target: 룰에 target 키워드가 있으면 Suricata 가 공격자·대상을 알려 준다. Manager가 출발지·대상을 정할 때 먼저 쓴다
+ALERT_INNER_KEYS = ("action", "gid", "signature_id", "rev", "signature", "category", "severity", "source", "target")
 PAYLOAD_KEYS = ("payload", "payload_printable", "packet", "packet_info")
 # 경보에 붙는 앱 계층 메타데이터 (alert_fields.app_layer가 켜져 있을 때만)
 APP_LAYER_KEYS = ("http", "dns", "tls", "smb", "ssh", "ftp", "smtp", "krb5", "ldap", "dcerpc",
@@ -104,15 +106,19 @@ def convert(lines, transport, sensor_id):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("eve", help="Suricata eve.json")
+    ap.add_argument("eve", nargs="+", help="Suricata eve 파일(eve-alert.json, eve-stats.json 등, 여러 개 가능)")
     ap.add_argument("-t", "--transport", required=True, help="render_config.py가 만든 transport/streams.json")
     ap.add_argument("-o", "--out", required=True, help="출력 디렉터리 (<stream>.jsonl)")
     ap.add_argument("--sensor-id", default="sensor-01")
     a = ap.parse_args(argv)
     with open(a.transport, encoding="utf-8") as f:
         transport = json.load(f)
-    with open(a.eve, encoding="utf-8") as f:
-        out = convert(f, transport, a.sensor_id)
+    lines = []
+    for path in a.eve:
+        if os.path.exists(path):   # 출력을 끈 파일은 없을 수 있다
+            with open(path, encoding="utf-8") as f:
+                lines.extend(f)
+    out = convert(lines, transport, a.sensor_id)
     os.makedirs(a.out, exist_ok=True)
     for name in ("suricata_alert", "suricata_stats"):
         path = os.path.join(a.out, name + ".jsonl")

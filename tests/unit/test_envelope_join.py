@@ -62,6 +62,33 @@ class TestEnvelope(unittest.TestCase):
         self.assertEqual(d["payload"], "AAAA")
         self.assertNotIn("metadata", d["alert"])
 
+    def test_alert_source_target(self):
+        # 룰에 target 키워드가 있으면 경보의 source·target 을 그대로 보낸다(Manager 출발지·대상 판정)
+        ev = eve_alert(T0, "10.0.0.1", "10.0.0.2")
+        ev["alert"]["source"] = {"ip": "10.0.0.2", "port": 80}
+        ev["alert"]["target"] = {"ip": "10.0.0.1", "port": 50000}
+        d = ee.convert([json.dumps(ev)], TRANSPORT, "s1")["suricata_alert"][0]["data"]
+        self.assertEqual((d["alert"]["source"]["ip"], d["alert"]["target"]["ip"]), ("10.0.0.2", "10.0.0.1"))
+
+    def test_main_split_files(self):
+        # 경보·통계 파일을 따로 받아 스트림별로 쓴다. 없는 파일(출력 끔)은 건너뛴다
+        tmp = tempfile.mkdtemp()
+        try:
+            al, st, tr = (os.path.join(tmp, n) for n in ("eve-alert.json", "eve-stats.json", "streams.json"))
+            with open(al, "w") as f:
+                f.write(json.dumps(eve_alert(T0, "a", "b")) + "\n")
+            with open(st, "w") as f:
+                f.write(json.dumps(eve_stats(T0, 5)) + "\n")
+            with open(tr, "w") as f:
+                json.dump(TRANSPORT, f)
+            out = os.path.join(tmp, "t")
+            self.assertEqual(ee.main([al, st, os.path.join(tmp, "eve-other.json"), "-t", tr, "-o", out]), 0)
+            for name in ("suricata_alert", "suricata_stats"):
+                with open(os.path.join(out, name + ".jsonl")) as f:
+                    self.assertEqual(len(f.readlines()), 1, name)
+        finally:
+            shutil.rmtree(tmp)
+
     def test_stats_downsample(self):
         lines = [json.dumps(eve_stats(T0 + s, s)) for s in (0, 8, 16, 64, 72, 200)]
         st = ee.convert(lines, TRANSPORT, "s1")["suricata_stats"]

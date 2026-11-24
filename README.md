@@ -4,7 +4,8 @@ NSM 센서(Zeek 기반 **자산 식별 · 탐지 · 메타데이터 선별 전�
 Suricata는 시그니처 경보만 맡고, 경보의 IP를 자산 식별(AssetID) 결과로 바꿔 **"어느 자산이 무슨 경보를 냈는지"** 를 보여 줍니다.
 
 - 설계: [docs/DESIGN.md](docs/DESIGN.md)
-- 자산 식별(AssetID, Zeek 패키지·리졸버): [`claudtest2`](https://github.com/kwsjjang8901-ship-it/claudtest2) 저장소. 이 저장소는 그 산출물(`assets.json`, Zeek 로그)만 사용합니다.
+- 경보를 NSM 탐지 흐름에 합치는 방법: nsm [SURICATA_INTEGRATION_DESIGN.md](https://github.com/kwsjjang8901-ship-it/nsm/blob/main/docs/SURICATA_INTEGRATION_DESIGN.md) (경보는 Zeek를 거치지 않고 `suricata_alert` 스트림으로 Manager에 바로 감)
+- 자산 식별(AssetID): 센서 패키지는 nsm 저장소 `nsm_rules/asset-id/`, PoC 실행 도구·리졸버는 [`claudtest2`](https://github.com/kwsjjang8901-ship-it/claudtest2) 저장소. 이 저장소는 그 산출물(`assets.json`, Zeek 로그)만 사용합니다.
 - 대상 버전: **Suricata 8.0.6** (7.0은 2026-07 EOL), Zeek 8.x/9.x(AssetID 기준)
 
 ## 원칙
@@ -14,12 +15,14 @@ Suricata는 시그니처 경보만 맡고, 경보의 IP를 자산 식별(AssetID
 | Zeek = 메타데이터, Suricata = 경보 | Suricata 프로토콜 로그(http/dns/tls/flow)는 기본 off. 같은 연결의 이중 기록을 막음 |
 | on/off | 센서 설정 하나(`sensor.yaml`)로 제어. **off이면 Suricata 관련 생성물이 하나도 없고 AssetID 결과는 단독 실행과 같음** |
 | 장애 격리 | 별도 프로세스·패킷 복사(AF_PACKET fanout 분리)·전송 스트림. 설정 검사 실패 시 Suricata만 건너뜀 |
-| 결합 키 | 경보 ↔ 자산: `(IP, 시각)` → 자산 IP 점유 구간. 경보 ↔ Zeek 로그: Community ID |
+| 결합 키 | 경보 ↔ 자산: `(IP, 시각)` → 자산 IP 점유 구간. 경보 ↔ Zeek 로그: Community ID(seed는 `community_id_seed` 하나로 두 엔진에 맞춤) |
+| 기본값 | 룰 범위는 `suricata/update/disable.conf`(Zeek 탐지와 겹치는 카테고리·IP 평판·Suricata 기본 이벤트 룰 끔), 경보 억제는 `suricata/threshold.config`(룰·출발지·목적지마다 60초 1건). [DESIGN 4.1](docs/DESIGN.md) |
 
 ## on/off 설정 (`config/sensor.example.yaml`)
 
 ```yaml
 asset_nets: [10.0.0.0/8, 172.16.0.0/12]   # Zeek AssetID::asset_nets 와 Suricata HOME_NET 공통 원천
+community_id_seed: 0    # Suricata eve 와 Zeek 에 같은 값
 suricata:
   enabled: false        # ★ 엔진 전체 on/off (출시 기본값 off)
   outputs: {alert: true, stats: true, anomaly: false, protocol_logs: false}
@@ -65,7 +68,7 @@ tools/run_poc.sh -S off -a ../claudtest2 ../claudtest2/tests/pcaps/demo.pcap
 | `transport/*.jsonl` | Manager로 보낼 스트림 (`suricata_alert`, `suricata_stats`) — 공통 envelope |
 | `config/` | 센서 설정에서 만든 `state.json`, Zeek 설정, `suricata.yaml`, 전송 스트림 설정 |
 | `assetid/` | AssetID 결과 (`report.html`, `assets.json`, Zeek 로그) |
-| `suricata/` | Suricata 원본 `eve.json`, 설정 검사·실행 로그 |
+| `suricata/` | Suricata 원본 `eve-alert.json`(경보)·`eve-stats.json`(통계), 설정 검사·실행 로그 |
 
 데모 결과 예시 (`alerts_report.txt` 일부, IP 재사용 IP 10.10.0.120의 경보가 시각에 따라 다른 단말에 붙음):
 
@@ -84,14 +87,14 @@ tools/run_poc.sh -S off -a ../claudtest2 ../claudtest2/tests/pcaps/demo.pcap
 | 도구 | 하는 일 |
 |---|---|
 | `tools/sensor_config.py` | 설정 로드·검증, 실제 동작 계산 (`--get suricata\|asset_nets\|effective`) |
-| `tools/render_config.py` | `sensor.yaml` → `zeek/nsm_sensor.zeek`, `suricata/suricata.yaml`(배포본을 읽어 필요한 키만 바꾼 전체 설정), `transport/streams.json` |
-| `tools/eve_envelope.py` | `eve.json` → 전송 스트림. 필드 허용 목록, 꺼진 스트림 미생성, stats 축약 |
+| `tools/render_config.py` | `sensor.yaml` → `zeek/nsm_sensor.zeek`(자산 대역, Community ID seed), `suricata/suricata.yaml`(배포본을 읽어 필요한 키만 바꾼 전체 설정, eve 경보·통계 파일 분리), `transport/streams.json`(스트림 on/off, 스트림별 입력 파일) |
+| `tools/eve_envelope.py` | eve 파일(경보·통계) → 전송 스트림. 필드 허용 목록, 꺼진 스트림 미생성, stats 축약 |
 | `tools/alert_join.py` | 경보 + `assets.json` (+ Zeek `conn.log`) → 자산 컨텍스트 경보·리포트 |
 
 ## 테스트
 
 ```bash
-tests/run_tests.sh                               # 단위 테스트 (18)
+tests/run_tests.sh                               # 단위 테스트 (21)
 ASSETID_ROOT=../claudtest2 tests/run_tests.sh    # + Docker 통합 테스트
 ```
 
@@ -100,11 +103,15 @@ ASSETID_ROOT=../claudtest2 tests/run_tests.sh    # + Docker 통합 테스트
 2. `demo.pcap`: IP 재사용 결합, DC 대상 표시, OS 불일치 표시, 모든 경보에 Zeek uid 연결
 3. `extras.pcap`: AhnLab V3 통신 경보의 자산 결합
 4. off 회귀: Suricata 생성물 없음, conn.log 형식 그대로, AssetID 결과가 단독 실행과 같음
+5. 룰 범위 기본값: ET 파일 이름을 흉내 낸 표본(`tests/rules/et_sample`)에 `suricata-update` + `disable.conf` → 켜지는 룰이 기대한 것뿐
+
+2번은 경보·통계 파일 분리(`eve-alert.json`, `eve-stats.json`)도 확인합니다.
 
 ## 단계
 
 | 단계 | 상태 |
 |---|---|
 | 1. PoC (pcap, 설정 렌더, 전송 envelope, 경보·자산 결합) | 완료 |
+| Manager 직접 전송 정비 (nsm 설계 S2: 경보·통계 파일 분리, 룰 범위·억제 기본값, Community ID seed, `source`·`target` 전송) | 완료 |
 | 2. 센서 통합 (systemd, AF_PACKET 실시간 공존, 수집 에이전트 스트림·우선순위, 상태 보고, 부하 측정) | 예정 |
 | 3. 연계 고도화 (자산 역할 → Suricata 주소 그룹, 자산 기반 우선순위, notice·경보 사건 묶기) | 예정 |

@@ -1,0 +1,3 @@
+alert tcp any any -> any any (msg:"ET SCAN Potential SSH Scan"; flow:to_server; threshold: type both, track by_src, count 5, seconds 120; sid:2001219; rev:1;)
+alert tcp any any -> any any (msg:"ET SCAN NMAP OS Detection Probe"; detection_filter: track by_src, count 5, seconds 60; sid:2001220; rev:1;)
+alert http any any -> any any (msg:"ET SCAN Nmap Scripting Engine User-Agent Detected (Nmap Scripting Engine)"; http.user_agent; content:"Nmap Scripting Engine"; sid:2009358; rev:1;)
